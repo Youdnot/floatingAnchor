@@ -42,8 +42,8 @@ def main():
     # Initialize the object tracker
     tracker = IncrementalObjectTracker(
         grounding_model_id="IDEA-Research/grounding-dino-tiny",
-        sam2_model_cfg= model_directory + "configs/sam2.1/sam2.1_hiera_l.yaml",
-        sam2_ckpt_path= model_directory + "./checkpoints/sam2.1_hiera_large.pt",
+        sam2_model_cfg= "configs/sam2.1/sam2.1_hiera_l.yaml",   # here seems to be the issue of installing the sam package as dependency?
+        sam2_ckpt_path= "./checkpoints/sam2.1_hiera_large.pt",
         device="cuda",
         prompt_text=prompt_text,
         detection_interval=detection_interval,
