@@ -1,3 +1,7 @@
+# Dependency library
+src/grounding_sam2
+src/hl2ss
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]
