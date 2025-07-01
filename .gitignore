@@ -1,6 +1,7 @@
 # Dependency library
 src/grounding_sam2
 src/hl2ss
+outputs
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

@@ -14,10 +14,7 @@
 from pynput import keyboard
 
 import cv2
-import src.hl2ss.hl2ss_imshow
-import src.hl2ss.hl2ss
-import src.hl2ss.hl2ss_lnm
-import src.hl2ss.hl2ss_utilities
+from src.hl2ss.viewer import hl2ss, hl2ss_imshow, hl2ss_lnm, hl2ss_utilities
 
 # Settings --------------------------------------------------------------------
 
@@ -62,52 +59,102 @@ decoded_format = 'bgr24'
 
 #------------------------------------------------------------------------------
 
-hl2ss_lnm.start_subsystem_pv(host, hl2ss.StreamPort.PERSONAL_VIDEO, enable_mrc=enable_mrc, shared=shared)
+class FrontCamStreamInput:
+    """
+    用于连接HoloLens2前置摄像头并获取视频流的类。
+    提供open、read、close方法。
+    """
+    def __init__(self,
+                 host="169.254.10.1",
+                 mode=None,
+                 enable_mrc=False,
+                 shared=True,
+                 width=1920,
+                 height=1080,
+                 framerate=5,
+                 profile=None,
+                 bitrate=None,
+                 decoded_format='bgr24'):
+        from src.hl2ss.viewer import hl2ss
+        self.host = host
+        self.mode = mode if mode is not None else hl2ss.StreamMode.MODE_1
+        self.enable_mrc = enable_mrc
+        self.shared = shared
+        self.width = width
+        self.height = height
+        self.framerate = framerate
+        self.profile = profile if profile is not None else hl2ss.VideoProfile.H265_MAIN
+        self.bitrate = bitrate
+        self.decoded_format = decoded_format
+        self._client = None
+        self._listener = None
+        self._opened = False
+        self._hl2ss = hl2ss
+        from src.hl2ss.viewer import hl2ss_lnm, hl2ss_utilities
+        self._hl2ss_lnm = hl2ss_lnm
+        self._hl2ss_utilities = hl2ss_utilities
 
-if (mode == hl2ss.StreamMode.MODE_2):
-    data = hl2ss_lnm.download_calibration_pv(host, hl2ss.StreamPort.PERSONAL_VIDEO, width=width, height=height, framerate=framerate)
-    print('Calibration')
-    print(f'Focal length: {data.focal_length}')
-    print(f'Principal point: {data.principal_point}')
-    print(f'Radial distortion: {data.radial_distortion}')
-    print(f'Tangential distortion: {data.tangential_distortion}')
-    print('Projection')
-    print(data.projection)
-    print('Intrinsics')
-    print(data.intrinsics)
-    print('RigNode Extrinsics')
-    print(data.extrinsics)
-    print(f'Intrinsics MF: {data.intrinsics_mf}')
-    print(f'Extrinsics MF: {data.extrinsics_mf}')
-else:
-    listener = hl2ss_utilities.key_listener(keyboard.Key.esc)
-    listener.open()
+    def open(self):
+        # 启动子系统
+        self._hl2ss_lnm.start_subsystem_pv(
+            self.host,
+            self._hl2ss.StreamPort.PERSONAL_VIDEO,
+            enable_mrc=self.enable_mrc,
+            shared=self.shared
+        )
+        # 只支持mode 0/1视频流
+        if self.mode == self._hl2ss.StreamMode.MODE_2:
+            raise NotImplementedError("Mode 2 (calibration) 暂不支持流式读取")\
+            
+        self._listener = self._hl2ss_utilities.key_listener(keyboard.Key.esc)
+        self._listener.open()
 
-    client = hl2ss_lnm.rx_pv(host, hl2ss.StreamPort.PERSONAL_VIDEO, mode=mode, width=width, height=height, framerate=framerate, profile=profile, bitrate=bitrate, decoded_format=decoded_format)
-    client.open()
+        self._client = self._hl2ss_lnm.rx_pv(
+            self.host,
+            self._hl2ss.StreamPort.PERSONAL_VIDEO,
+            mode=self.mode,
+            width=self.width,
+            height=self.height,
+            framerate=self.framerate,
+            profile=self.profile,
+            bitrate=self.bitrate,
+            decoded_format=self.decoded_format
+        )
+        self._client.open()
+        self._opened = True
 
-    while (not listener.pressed()):
-        data = client.get_next_packet()
+    def read(self):
+        """获取下一帧图像，返回numpy数组（BGR）或None。"""
+        if not self._opened:
+            raise RuntimeError("请先调用open()方法")
+        data = self._client.get_next_packet()
+        # 返回BGR格式图像
+        return data.payload.image
 
-        print(f'Frame captured at {data.timestamp}')
-        print(f'Focal length: {data.payload.focal_length}')
-        print(f'Principal point: {data.payload.principal_point}')
-        print(f'Exposure Time: {data.payload.exposure_time}')
-        print(f'Exposure Compensation: {data.payload.exposure_compensation}')
-        print(f'Lens Position (Focus): {data.payload.lens_position}')
-        print(f'Focus State: {data.payload.focus_state}')
-        print(f'ISO Speed: {data.payload.iso_speed}')
-        print(f'White Balance: {data.payload.white_balance}')
-        print(f'ISO Gains: {data.payload.iso_gains}')
-        print(f'White Balance Gains: {data.payload.white_balance_gains}')
-        print(f'Resolution {data.payload.resolution}')
-        print(f'Pose')
-        print(data.pose)
+    def close(self):
+        if self._client is not None:
+            self._client.close()
+        if self._listener is not None:
+            self._listener.close()
+        self._hl2ss_lnm.stop_subsystem_pv(self.host, self._hl2ss.StreamPort.PERSONAL_VIDEO)
+        self._opened = False
 
-        cv2.imshow('Video', data.payload.image)
-        cv2.waitKey(1)
-
-    client.close()
-    listener.close()
+# 保留原有main示例（可选）
+if __name__ == "__main__":
+    cam = FrontCamStreamInput()
+    cam.open()
+    try:
+        while True:
+            frame = cam.read()
+            if frame is None:
+                break
+            cv2.imshow('Video', frame)
+            if cv2.waitKey(1) & 0xFF == 27:  # ESC退出
+                break
+    finally:
+        cam.close()
+        cv2.destroyAllWindows()
 
 hl2ss_lnm.stop_subsystem_pv(host, hl2ss.StreamPort.PERSONAL_VIDEO)
+
+

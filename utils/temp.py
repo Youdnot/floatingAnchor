@@ -21,7 +21,7 @@ if torch.cuda.get_device_properties(0).major >= 8:
     torch.backends.cudnn.allow_tf32 = True
 
 from utils.camera_tracking import GroundingDinoPredictor, SAM2ImageSegmentor, IncrementalObjectTracker
-
+from utils.front_cam_stream_input import FrontCamStreamInput
 
 import os
 
@@ -33,13 +33,12 @@ from pynput import keyboard
 
 import cv2
 from src.hl2ss.viewer import hl2ss, hl2ss_imshow, hl2ss_lnm, hl2ss_utilities
-from utils.front_cam_stream_input import FrontCamStreamInput
 
 def main():
     # Detection parameter settings
     output_dir = "./outputs"
     prompt_text = "person."
-    detection_interval = 4  # original 20, 4 to pair the hololens2 framerate
+    detection_interval = 20
     max_frames = 300  # Maximum number of frames to process (prevents infinite loop)
 
     os.makedirs(output_dir, exist_ok=True)
@@ -56,35 +55,41 @@ def main():
     )
     tracker.set_prompt("person. obstacle. viehicle. car. bus. truck. desk. table. ground. road. sidewalk. wall.")
 
-    # Open the camera (or replace with local video file, e.g., cv2.VideoCapture("video.mp4"))
-    # cap = cv2.VideoCapture(0)
-    # if not cap.isOpened():
-    #     print("[Error] Cannot open camera.")
-    #     return
-
-    # Open the HoloLens2 front camera stream
-    cam = FrontCamStreamInput()
-    cam.open()
-    print("[Info] Using HoloLens2 front camera stream.")
+    # 优先尝试用HoloLens2前置摄像头流
+    cam = None
+    use_hololens = True
+    try:
+        cam = FrontCamStreamInput()
+        cam.open()
+        print("[Info] Using HoloLens2 front camera stream.")
+    except Exception as e:
+        print(f"[Warning] Failed to open HoloLens2 stream: {e}\nFallback to local camera.")
+        use_hololens = False
+        cam = cv2.VideoCapture(0)
+        if not cam.isOpened():
+            print("[Error] Cannot open local camera.")
+            return
+        print("[Info] Using local camera.")
 
     print("[Info] Camera opened. Press 'q' to quit.")
     frame_idx = 0
 
     try:
         while True:
-            # ret, frame = cap.read()
-            # if not ret:
-            #     print("[Warning] Failed to capture frame.")
-            #     break
-            frame = cam.read()
-            if frame is None:
+            if use_hololens:
+                frame = cam.read()
+                if frame is None:
                     print(f"[Warning] Failed to get frame from HoloLens2 stream.")
                     break
-            
+            else:
+                ret, frame = cam.read()
+                if not ret:
+                    print("[Warning] Failed to capture frame.")
+                    break
+                frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
 
-            frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
             print(f"[Frame {frame_idx}] Processing live frame...")
-            process_image = tracker.add_image(frame_rgb)
+            process_image = tracker.add_image(frame)
 
             if process_image is None or not isinstance(process_image, np.ndarray):
                 print(f"[Warning] Skipped frame {frame_idx} due to empty result.")
@@ -94,12 +99,11 @@ def main():
             # process_image_bgr = cv2.cvtColor(process_image, cv2.COLOR_RGB2BGR)
             # cv2.imshow("Live Inference", process_image_bgr)
 
-            
             # if cv2.waitKey(1) & 0xFF == ord('q'):
             #     print("[Info] Quit signal received.")
             #     break
 
-            tracker.save_current_state(output_dir=output_dir, raw_image=frame_rgb)
+            tracker.save_current_state(output_dir=output_dir, raw_image=frame)
             frame_idx += 1
 
             if frame_idx >= max_frames:
@@ -108,9 +112,10 @@ def main():
     except KeyboardInterrupt:
         print("[Info] Interrupted by user (Ctrl+C).")
     finally:
-        # cap.release()
-        cam.close()
-        hl2ss_lnm.stop_subsystem_pv(cam.host, hl2ss.StreamPort.PERSONAL_VIDEO)
+        if use_hololens and cam is not None:
+            cam.close()
+        elif cam is not None:
+            cam.release()
         cv2.destroyAllWindows()
         print("[Done] Live inference complete.")
 
